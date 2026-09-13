@@ -9,9 +9,13 @@ import json
 import os
 from collections import defaultdict
 
-ARM_ORDER = ["rlt", "rlt_a0", "rlt_untied", "plain"]
+# Files that live in results/ but are not runs.
+SKIP = {"summary.json"}
+
+ARM_ORDER = ["rlt", "rlt_nope", "rlt_untied", "rlt_a0", "plain"]
 ARM_LABEL = {
     "rlt": "RLT (alpha=1, tied)",
+    "rlt_nope": "RLT (alpha=1, no RoPE)",
     "rlt_a0": "RLT alpha=0  [no recurrence]",
     "rlt_untied": "RLT untied (Sec. 2.6)",
     "plain": "plain causal Transformer",
@@ -30,7 +34,7 @@ def mean_std(xs):
 def load(d):
     runs = defaultdict(list)
     for f in sorted(glob.glob(os.path.join(d, "*.json"))):
-        if os.path.basename(f).startswith("c6_"):
+        if os.path.basename(f) in SKIP or os.path.basename(f).startswith("c6_"):
             continue
         r = json.load(open(f))
         tag = r["tag"]
@@ -125,7 +129,7 @@ def summary(d="results"):
     """Compact, printable digest -- small enough to move between machines by hand."""
     out = {}
     for f in sorted(glob.glob(os.path.join(d, "*.json"))):
-        if os.path.basename(f).startswith("c6_"):
+        if os.path.basename(f) in SKIP or os.path.basename(f).startswith("c6_"):
             continue
         r = json.load(open(f))
         out[r["tag"]] = {
