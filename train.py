@@ -33,7 +33,7 @@ def build(args, device):
 
 
 @torch.no_grad()
-def evaluate(model, task, length, batch, device, chunks=4):
+def evaluate(model, task, length, batch, device, chunks=2):
     """Accuracy over fresh samples. Also reports accuracy at the FINAL position,
     which is the one requiring the deepest composition."""
     model.eval()

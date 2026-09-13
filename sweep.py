@@ -45,6 +45,10 @@ def main():
     p.add_argument("--out", default="results")
     p.add_argument("--logs", default="logs")
     p.add_argument("--compile", type=int, default=1)
+    p.add_argument("--shard", default="0/1",
+                   help="i/n -- take every n-th job. The decoder loop leaves the GPU "
+                        "mostly idle between tiny kernels, so two workers overlap "
+                        "almost for free.")
     args = p.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -55,6 +59,8 @@ def main():
     arms = [a for a in ARMS if a[0] in keep]
 
     jobs = list(itertools.product(groups, arms, seeds))
+    si, sn = (int(v) for v in args.shard.split("/"))
+    jobs = [j for k, j in enumerate(jobs) if k % sn == si]
     print(f"{len(jobs)} runs: groups={groups} arms={[a[0] for a in arms]} seeds={seeds}",
           flush=True)
     t0 = time.time()
