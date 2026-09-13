@@ -166,43 +166,60 @@ def check_replay(model, task, args, device):
         print(f"      {mode:<10s} {r.mean().item():>10.6f} "
               f"{(r-1).abs().max().item():>12.3e} {logr.abs().max().item():>13.3e}")
 
-    print("\n  (b) Replay AFTER one optimizer step, i.e. the ordinary training case.")
-    print("      Now every ratio moves; the question is which one is correct.")
+    print("\n  (b) Replay after N optimizer steps -- the ordinary training case.")
+    print("      Staleness is a POST-UPDATE phenomenon. Sec. 5.4 places it precisely:")
+    print("      'After an optimizer update, previously computed encoder KV, recurrent")
+    print("      outputs, and decoder SWA KV generally cease to be current-policy")
+    print("      values.'  So the error should be absent at N = 0 and grow from N = 1.\n")
     opt = torch.optim.SGD(model.parameters(), lr=1e-3)
-    lp = replay(model, batch, "exact")
     adv = batch["reward"] - batch["reward"].mean()
-    (-(adv[:, None] * lp).mean()).backward()
-    opt.step()
-    opt.zero_grad(set_to_none=True)
-
-    with torch.no_grad():
-        ref = replay(model, batch, "exact")
-        print(f"\n      {'schedule':<10s} {'mean |log r|':>14s} "
-              f"{'max |log p - log p_exact|':>28s}")
-        for mode in ("exact", "nograd", "stale", "reset"):
-            lp = replay(model, batch, mode)
-            d = (lp - ref).abs().max().item()
-            out[mode]["post_update_mean_abs_logr"] = (lp - batch["logmu"]).abs().mean().item()
-            out[mode]["post_update_err_vs_exact"] = d
-            print(f"      {mode:<10s} "
-                  f"{(lp - batch['logmu']).abs().mean().item():>14.6f} {d:>28.3e}")
+    print(f"      {'updates':>7s}  " +
+          "  ".join(f"{m:>12s}" for m in ("nograd", "stale", "reset")))
+    print(f"      {'':>7s}  " + "  ".join(f"{'max |log p - log p_exact|':>12s}"[:12]
+                                          for _ in range(3)))
+    drift = {m: {} for m in ("nograd", "stale", "reset")}
+    for n in range(1, 21):
+        lp = replay(model, batch, "exact")
+        (-(adv[:, None] * lp).mean()).backward()
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+        if n in (1, 2, 5, 10, 20):
+            with torch.no_grad():
+                ref = replay(model, batch, "exact")
+                row = []
+                for mode in ("nograd", "stale", "reset"):
+                    d = (replay(model, batch, mode) - ref).abs().max().item()
+                    drift[mode][n] = d
+                    row.append(f"{d:>12.3e}")
+            print(f"      {n:>7d}  " + "  ".join(row))
+    out["drift"] = drift
 
     print("\n  (c) Gradient paths. nograd matches exact's FORWARD values; Sec. 5.4")
     print("      says it still omits prompt-state derivatives.\n")
-    grads = {}
+    params = list(model.parameters())
+    grads, missing = {}, {}
     for mode in ("exact", "nograd"):
         model.zero_grad(set_to_none=True)
         lp = replay(model, batch, mode)
         (-(adv[:, None] * lp).mean()).backward()
-        grads[mode] = torch.cat([p.grad.reshape(-1) for p in model.parameters()
-                                 if p.grad is not None])
+        # A parameter whose .grad is None received NO gradient under this schedule.
+        # Dropping those silently compares vectors of different length; substitute
+        # zeros and count them instead, because the count is itself the finding.
+        missing[mode] = sum(p.numel() for p in params if p.grad is None)
+        grads[mode] = torch.cat([(p.grad if p.grad is not None
+                                  else torch.zeros_like(p)).reshape(-1)
+                                 for p in params])
     ge, gn = grads["exact"], grads["nograd"]
     cos = F.cosine_similarity(ge[None], gn[None]).item()
     print(f"      ||g_exact|| = {ge.norm():.6e}   ||g_nograd|| = {gn.norm():.6e}")
     print(f"      cosine(g_exact, g_nograd) = {cos:.6f}   "
           f"norm ratio = {(gn.norm()/ge.norm()).item():.4f}")
+    print(f"      parameter entries receiving NO gradient: exact {missing['exact']}, "
+          f"nograd {missing['nograd']}")
+    print(f"      (d_model = {model.cfg.d_model}; that is exactly s_star, Eq. (2.3) --")
+    print(f"       the learned initial state is unreachable once the prompt is no_grad.)")
     out["grad"] = {"cos": cos, "norm_exact": ge.norm().item(),
-                   "norm_nograd": gn.norm().item()}
+                   "norm_nograd": gn.norm().item(), "no_grad_entries": missing}
 
     print("\n  (d) Sec. 5.3 on truncated sampling: 'Top-k or top-p behavior sampling")
     print("      generally violates [absolute continuity] for an untruncated softmax")
@@ -218,13 +235,17 @@ def check_replay(model, task, args, device):
     print(f"       the target distribution must be replaced consistently, not patched.)")
     out["topk_mean_r"] = logr.exp().mean().item()
 
-    ok = (out["exact"]["max_abs_r_minus_1"] < 1e-4
-          and out["stale"]["max_abs_r_minus_1"] > 1e-3
-          and out["reset"]["max_abs_r_minus_1"] > 1e-3)
-    print(f"\n  VERDICT: {'CONFIRMED' if ok else 'REFUTED'} -- exact replay reproduces the "
-          f"sampler ({out['exact']['max_abs_r_minus_1']:.2e}); "
-          f"stale ({out['stale']['max_abs_r_minus_1']:.2e}) and "
-          f"reset ({out['reset']['max_abs_r_minus_1']:.2e}) do not.")
+    ok = (out["exact"]["max_abs_r_minus_1"] < 1e-6
+          and out["reset"]["max_abs_r_minus_1"] > 1e-3
+          and drift["stale"][1] > 1e-4)
+    print(f"\n  VERDICT: {'CONFIRMED' if ok else 'REFUTED'}")
+    print(f"    Exact replay reproduces the sampler at identical parameters to "
+          f"{out['exact']['max_abs_r_minus_1']:.1e}.")
+    print(f"    Boundary reset breaks that identity immediately: "
+          f"{out['reset']['max_abs_r_minus_1']:.2e}, with no update required.")
+    print(f"    Stale states are CORRECT at identical parameters and wrong after one "
+          f"update ({drift['stale'][1]:.2e}),")
+    print(f"    which is where Sec. 5.4 puts the problem -- not before.")
     out["verdict"] = bool(ok)
     return out
 
