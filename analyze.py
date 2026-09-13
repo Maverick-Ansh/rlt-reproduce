@@ -43,7 +43,11 @@ def load(d):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default="results")
+    ap.add_argument("--summary", action="store_true")
     a = ap.parse_args()
+    if a.summary:
+        print(json.dumps(summary(a.dir), separators=(",", ":")))
+        return
     runs = load(a.dir)
     if not runs:
         print(f"no results in {a.dir}")
@@ -115,6 +119,26 @@ def main():
         print(f"  {ARM_LABEL[arm]:<32s} params {r['params']:>10,}  "
               f"blocks/token {r['blocks_per_token']}  "
               f"{r['wall_s']/r['args']['steps']*1000:6.0f} ms/step")
+
+
+def summary(d="results"):
+    """Compact, printable digest -- small enough to move between machines by hand."""
+    out = {}
+    for f in sorted(glob.glob(os.path.join(d, "*.json"))):
+        if os.path.basename(f).startswith("c6_"):
+            continue
+        r = json.load(open(f))
+        out[r["tag"]] = {
+            "eval": {k: [round(v["acc"], 4), round(v["acc_final_pos"], 4)]
+                     for k, v in r["eval"].items()},
+            "params": r["params"],
+            "train_acc": round(r["history"][-1]["acc"], 4),
+            "train_loss": round(r["history"][-1]["loss"], 4),
+            "ms_per_step": round(r["wall_s"] / r["args"]["steps"] * 1000),
+            "length": r["args"]["length"], "layers": r["args"]["layers"],
+            "steps": r["args"]["steps"], "rope": r["args"].get("rope", 1),
+        }
+    return out
 
 
 if __name__ == "__main__":
