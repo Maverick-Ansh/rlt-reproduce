@@ -14,7 +14,10 @@ import os
 import time
 
 import torch
+import torch._dynamo
 import torch.nn.functional as F
+
+torch._dynamo.config.cache_size_limit = 32
 
 from rlt import RLTConfig, RLT, PlainCausalTransformer
 from rlt.tasks import GroupTask, VOCAB, chance_accuracy
@@ -133,6 +136,11 @@ def main():
             print(f"  step {i:5d}  loss {loss.item():.4f}  acc {acc:.4f}  "
                   f"|g| {float(gn):.2f}  {time.time() - t0:.0f}s", flush=True)
 
+    # Evaluation runs the UNCOMPILED fixed-slot path. Each eval length is a new
+    # shape, and on a 2-vCPU box a fresh Inductor compile per length costs more
+    # than the whole evaluation saves. The two paths are checked identical in
+    # smoke_static.py, so this changes cost and not results.
+    model._compiled_step = None
     evals = {}
     for L in [int(v) for v in args.eval_lengths.split(",")]:
         if L + 1 > cfg.max_position:
