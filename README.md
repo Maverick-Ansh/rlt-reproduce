@@ -69,8 +69,37 @@ REPORT.md         results, deviations, and what broke
 
 ## Results
 
-See [`REPORT.md`](REPORT.md). Read the *What broke* section first — it is the part
-that is hardest to get from the paper alone.
+See [`REPORT.md`](REPORT.md) for the full account. The short version:
+
+![accuracy against evaluation length](figure.png)
+
+**All seven exactness claims hold.** The sharpest is C3: a token-parallel decoder
+pass fixes *exactly one more position per Jacobi sweep*, never two, so there is no
+parallel shortcut around the recurrence — and the non-equivalence vanishes exactly
+when `alpha = 0`, which pins it to Eq. (2.11)'s feedback term.
+
+**The deferred experiment resolves cleanly.** On A5 prefix products (NC1-complete)
+at the training length, RLT scores **1.000 ± 0.000** while the identical model with
+`alpha = 0` scores **0.152 ± 0.084** — and both fixed-depth arms sit at chance on
+the deepest position. On Z60, a group with the same 60 elements but abelian, the
+recurrence is worth **+0.0001**, inside the seed spread. The gain is depth, not
+capacity.
+
+**The interesting failure was mine, not the paper's.** RLT trained at length 32
+extrapolated erratically (0.505 ± 0.266 at 8× length) until the positional encoding
+was removed, at which point it reached **0.983 ± 0.022**. The recurrent state
+generalises; RoPE queried past its trained range does not. The paper leaves
+positional handling open ("any positional transformation", Eq. 2.12–2.13), and that
+open choice decides the result.
+
+**One unplanned finding:** on Z60, RLT with recurrence available behaves
+*identically* to RLT with it switched off, including the same hard positional cliff
+at the training length. §1 says "The architecture makes that path available;
+learning useful reasoning along it is a separate question." Measured answer: the
+path is walked only when the task leaves no alternative.
+
+Read the *What broke* section of the report first — it is the part hardest to get
+from the paper alone.
 
 ## Deviations from the paper, at a glance
 
