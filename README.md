@@ -49,7 +49,7 @@ python check_task.py                 # evaluation gate: is the metric able to re
 python smoke.py --device cuda        # C1-C5, untrained model, ~1 min
 python smoke_static.py --compile     # C7: the fast kernel is the same model
 python rl.py --rl-steps 0            # C6: replay ratios
-python sweep.py --steps 1600 --length 32 --layers 2 --batch 384
+python sweep.py --steps 1200 --length 32 --layers 2 --batch 384   # the grid that produced REPORT.md
 python analyze.py
 ```
 

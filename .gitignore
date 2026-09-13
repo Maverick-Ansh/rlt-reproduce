@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
-runs/
-results/
+logs/
+results/*.json
+!results/summary.json
+!results/c6_replay.json
 *.pt
