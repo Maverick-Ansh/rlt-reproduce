@@ -73,6 +73,9 @@ def main():
     p.add_argument("--eval-batch", type=int, default=256)
     p.add_argument("--out", default="results")
     p.add_argument("--tag", default=None)
+    p.add_argument("--static", type=int, default=1,
+                   help="fixed-slot recurrence; verified identical in smoke_static.py")
+    p.add_argument("--compile", type=int, default=0)
     args = p.parse_args()
     args.tied = bool(args.tied)
 
@@ -89,6 +92,10 @@ def main():
     task = GroupTask(args.group, device=device)
     cfg, model = build(args, device)
     n_par = model.n_params()
+    if args.arch == "rlt":
+        model.use_static = bool(args.static)
+        if args.compile:
+            model.enable_compile()
 
     decay = [p_ for n, p_ in model.named_parameters() if p_.dim() >= 2]
     nodecay = [p_ for n, p_ in model.named_parameters() if p_.dim() < 2]

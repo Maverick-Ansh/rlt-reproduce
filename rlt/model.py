@@ -184,6 +184,30 @@ class DecoderLayer(nn.Module):
         new_cache = _append(cache, k, v, keep=self.cfg.W - 1)
         return a + self.ffn(self.norm_ffn(a)), new_cache               # Eq. (2.16)
 
+    def forward_step_static(self, z, pos, ck, cv, hist_mask, mem: KV, mem_mask):
+        """Identical arithmetic to `forward_step`, with shapes that never change.
+
+        App. B suggests exactly this representation: "use a fixed-slot
+        representation of the decoder cache, with validity masks during warm-up".
+        The cache is always [B, H, W-1, Dh] and the encoder memory is always the
+        full [B, H, S, Dh]; what varies with t is a boolean mask, not a shape. That
+        makes the whole per-token step one reusable compiled graph instead of a
+        fresh one per position.
+
+        The padded slots are masked to exactly -inf before the softmax, so they
+        contribute exactly 0.0 and carry no gradient. Sec. 4.2's warning applies in
+        the other direction too -- "a faster kernel that reads future entries
+        changes the model" -- so this path is checked against the reference
+        recurrence in smoke_static.py rather than assumed equivalent.
+        """
+        q, k, v = self.swa_qkv(z, pos)
+        kk = torch.cat([ck, k], dim=2)                 # [B, H, W, Dh], static
+        vv = torch.cat([cv, v], dim=2)
+        b = z + self.core.o_proj(self.core.merge(attend(q, kk, vv, hist_mask)))
+        a = self.cross(b, pos, mem, mem_mask)
+        z = a + self.ffn(self.norm_ffn(a))
+        return z, kk[:, :, 1:], vv[:, :, 1:]
+
     def forward_parallel(self, z, pos, mem: KV, swa_mask, mem_mask):
         """Token-parallel SWA over GIVEN inputs z.
 
@@ -242,6 +266,8 @@ class RLT(nn.Module):
         self.W_o = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
         self.block_evals = 0          # instrumentation for claim C5
+        self.use_static = False       # fast path; must stay numerically identical
+        self._compiled_step = None
         self.apply(self._init)
         nn.init.normal_(self.s_star, std=cfg.init_std)
 
@@ -400,7 +426,68 @@ class RLT(nn.Module):
             return out, final, torch.stack(states, 1)
         return out, final
 
-    def forward(self, x, parallel_encode: bool = True, collect_states: bool = False):
+    # ------------------------------------------------- static-shape unroll
+
+    def _step_static(self, e_i, s, ck, cv, pos, hist_mask, mem_k, mem_v, mem_mask):
+        z = self.merge(e_i, s.unsqueeze(1))
+        nk, nv = [], []
+        for l, layer in enumerate(self.decoder):
+            g = self.group_of(l)
+            z, a, b = layer.forward_step_static(z, pos, ck[l], cv[l], hist_mask,
+                                                (mem_k[g], mem_v[g]), mem_mask)
+            nk.append(a); nv.append(b)
+        return z.squeeze(1), nk, nv
+
+    def unroll_static(self, x, collect_states: bool = False):
+        """Teacher-forced unroll over a whole known sequence, App. A.3.
+
+        Mathematically the same computation as `consume`; every shape is fixed, so
+        one compiled graph serves all S positions. Training only -- generation
+        appends tokens and therefore uses the growing-cache path.
+        """
+        B, S = x.shape
+        dev, dt = x.device, self.embed.weight.dtype
+        cfg = self.cfg
+        pos_all = torch.arange(S, device=dev)
+        e, _ = self.encode_parallel(x, pos_all)
+        mem = self.project_memory(e, pos_all, [None] * cfg.G)
+        mem_k = [m[0] for m in mem]
+        mem_v = [m[1] for m in mem]
+
+        # M_{<=t}: row t of a causal mask (Sec. 2.4, "attention is restricted to
+        # M_{<=t} even though the entire prompt memory is available").
+        cmask = causal_mask(S, dev)[:, None, None, :]          # [S,1,1,S]
+        # Fixed-slot SWA validity: slot j of W-1 holds position t-(W-1)+j, which is
+        # real only once t is large enough. Sec. 2.5's retention rule, as a mask.
+        W = cfg.W
+        j = torch.arange(W - 1, device=dev)
+        tt = torch.arange(S, device=dev)[:, None]
+        valid = j[None, :] >= (W - 1) - torch.clamp(tt, max=W - 1)
+        cur = torch.ones(S, 1, dtype=torch.bool, device=dev)
+        hmask = torch.cat([valid, cur], dim=1)[:, None, None, :]  # [S,1,1,W]
+
+        nh, dh = cfg.n_heads, cfg.d_head
+        ck = [torch.zeros(B, nh, W - 1, dh, device=dev, dtype=dt) for _ in range(cfg.L_D)]
+        cv = [torch.zeros(B, nh, W - 1, dh, device=dev, dtype=dt) for _ in range(cfg.L_D)]
+
+        step = self._compiled_step if self._compiled_step is not None else self._step_static
+        s = self.s_star.to(device=dev, dtype=dt).expand(B, -1).contiguous()
+        states = []
+        for i in range(S):
+            s, ck, cv = step(e[:, i:i + 1], s, ck, cv, pos_all[i:i + 1],
+                             hmask[i], mem_k, mem_v, cmask[i])
+            states.append(s)
+        st = torch.stack(states, 1)
+        logits = self.readout(st)
+        return (logits, None, st) if collect_states else (logits, None)
+
+    def enable_compile(self, mode: str = "default"):
+        self._compiled_step = torch.compile(self._step_static, dynamic=False, mode=mode)
+
+    def forward(self, x, parallel_encode: bool = True, collect_states: bool = False,
+                static: Optional[bool] = None):
+        if static if static is not None else self.use_static:
+            return self.unroll_static(x, collect_states=collect_states)
         st = self.init_state(x.shape[0], x.device, self.embed.weight.dtype)
         return self.consume(x, st, parallel_encode=parallel_encode,
                             collect_states=collect_states)

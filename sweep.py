@@ -44,6 +44,7 @@ def main():
     p.add_argument("--arms", default="rlt,rlt_a0,rlt_untied,plain")
     p.add_argument("--out", default="results")
     p.add_argument("--logs", default="logs")
+    p.add_argument("--compile", type=int, default=1)
     args = p.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -66,7 +67,8 @@ def main():
                "--alpha", str(alpha), "--tied", str(tied), "--seed", str(seed),
                "--steps", str(args.steps), "--length", str(args.length),
                "--batch", str(args.batch), "--layers", str(args.layers),
-               "--d-model", str(args.d_model), "--out", args.out, "--tag", tag]
+               "--d-model", str(args.d_model), "--out", args.out, "--tag", tag,
+               "--compile", str(args.compile)]
         print(f"[{i+1}/{len(jobs)}] {tag}  ({time.time()-t0:.0f}s elapsed)", flush=True)
         with open(os.path.join(args.logs, tag + ".log"), "w") as f:
             r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
