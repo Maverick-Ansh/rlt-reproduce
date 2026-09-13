@@ -64,37 +64,48 @@ def check_labels(t, length=64, batch=8192):
     return x, y, freq.max().item()
 
 
+def _fit_eval_table(key, tgt, n_keys):
+    """Fit a lookup table on the first half, score it on the second.
+
+    The held-out split is not optional. Fitting AND scoring on the same data makes
+    the table memorise: at k = 3 there are 60^3 = 216,000 keys against ~500,000
+    samples, roughly two samples per key, and the argmax of two samples reproduces
+    the data it was fitted on. The first version of this file did exactly that and
+    reported a 0.40 "shortcut" that does not exist. The number was measuring the
+    estimator's variance, not the task.
+    """
+    n = key.shape[0] // 2
+    tab = torch.zeros(n_keys, ORDER, dtype=torch.long)
+    tab.index_put_((key[:n], tgt[:n]), torch.ones_like(key[:n]), accumulate=True)
+    pred = tab.argmax(-1)[key[n:]]
+    return (pred == tgt[n:]).float().mean().item()
+
+
 def check_shortcuts(t, x, y, length=64):
     """Can the last k input tokens alone predict the running product?
 
-    Fit the optimal lookup table on the data itself -- an oracle shortcut, strictly
-    stronger than anything a model could learn -- and report its accuracy. For a
-    group, the prefix product is uniform given any bounded suffix of inputs, so
-    every one of these must sit at chance. If one does not, the task is not
-    depth-bound and E1/E2 would be measuring the wrong thing.
+    Fit the optimal lookup table -- an oracle shortcut, strictly stronger than
+    anything a model could learn -- and score it on held-out data. For a group,
+    p_{t-k} is uniform and independent of the last k inputs, so p_t is uniform
+    given them: every one of these must land at chance. If one does not, the task
+    is not depth-bound and E1/E2 would be measuring the wrong thing.
     """
     g = x[:, 1:]                                  # drop BOS
-    print("  oracle shortcut policies (fit on the eval data itself):")
+    best = 0.0
+    print("  oracle shortcut policies (fit on half, scored on held-out half):")
     for k in (1, 2, 3):
         # key = the last k inputs, as a base-60 integer
         key = torch.zeros_like(g[:, k - 1:])
         for j in range(k):
             key = key * ORDER + g[:, k - 1 - j: g.shape[1] - j]
-        tgt = y[:, k - 1:]
-        n = ORDER ** k
-        tab = torch.zeros(n, ORDER, dtype=torch.long)
-        tab.index_put_((key.reshape(-1), tgt.reshape(-1)),
-                       torch.ones_like(key.reshape(-1)), accumulate=True)
-        pred = tab.argmax(-1)[key.reshape(-1)]
-        acc = (pred == tgt.reshape(-1)).float().mean().item()
+        acc = _fit_eval_table(key.reshape(-1), y[:, k - 1:].reshape(-1), ORDER ** k)
+        best = max(best, acc)
         print(f"    last {k} input token(s)        : {acc:.4f}")
     # position-only shortcut
-    tab = torch.zeros(y.shape[1], ORDER, dtype=torch.long)
     pos = torch.arange(y.shape[1]).expand_as(y)
-    tab.index_put_((pos.reshape(-1), y.reshape(-1)),
-                   torch.ones_like(pos.reshape(-1)), accumulate=True)
-    acc = (tab.argmax(-1)[pos.reshape(-1)] == y.reshape(-1)).float().mean().item()
+    acc = _fit_eval_table(pos.reshape(-1), y.reshape(-1), y.shape[1])
     print(f"    position index only          : {acc:.4f}")
+    return max(best, acc)
 
 
 def main():
@@ -110,12 +121,12 @@ def main():
     for name in ("a5", "z60"):
         t, abelian = check_group(name)
         x, y, top = check_labels(t)
-        check_shortcuts(t, x, y)
+        top = max(top, check_shortcuts(t, x, y))
         worst = max(worst, top)
 
     print("\n" + "=" * 78)
     ok = worst < 2.5 * chance_accuracy()
-    print(f"GATE: {'PASS' if ok else 'FAIL'} -- best degenerate policy scores "
+    print(f"GATE: {'PASS' if ok else 'FAIL'} -- best degenerate/shortcut policy scores "
           f"{worst:.4f} against a {chance_accuracy():.4f} floor.")
     print("=" * 78)
     if not ok:
