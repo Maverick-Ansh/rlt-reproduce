@@ -226,7 +226,8 @@ class RLT(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.embed = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        self.rope = RoPE(cfg.d_head, cfg.rope_base, cfg.max_position)
+        self.rope = (RoPE(cfg.d_head, cfg.rope_base, cfg.max_position)
+                     if cfg.use_rope else (lambda x, pos: x))
 
         cores = [AttentionCore(cfg.d_model, cfg.n_heads) for _ in range(cfg.L_E)]
         ffns = [FFN(cfg.d_model, cfg.d_ff) for _ in range(cfg.L_E)]

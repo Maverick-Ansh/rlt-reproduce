@@ -28,7 +28,7 @@ def build(args, device):
         vocab_size=VOCAB, d_model=args.d_model, n_heads=args.n_heads,
         L_E=args.layers, L_D=args.layers, d_ff=4 * args.d_model,
         W=args.window, G=1, alpha=args.alpha, tied=args.tied,
-        max_position=args.max_position,
+        max_position=args.max_position, use_rope=bool(args.rope),
     )
     torch.manual_seed(args.seed)
     model = (PlainCausalTransformer(cfg) if args.arch == "plain" else RLT(cfg))
@@ -79,6 +79,7 @@ def main():
     p.add_argument("--static", type=int, default=1,
                    help="fixed-slot recurrence; verified identical in smoke_static.py")
     p.add_argument("--compile", type=int, default=0)
+    p.add_argument("--rope", type=int, default=1)
     args = p.parse_args()
     args.tied = bool(args.tied)
 

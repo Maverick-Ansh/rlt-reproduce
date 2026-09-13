@@ -47,7 +47,8 @@ class PlainCausalTransformer(nn.Module):
         self.cfg = cfg
         self.depth = cfg.L_E + cfg.L_D
         self.embed = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        self.rope = RoPE(cfg.d_head, cfg.rope_base, cfg.max_position)
+        self.rope = (RoPE(cfg.d_head, cfg.rope_base, cfg.max_position)
+                     if cfg.use_rope else (lambda x, pos: x))
         self.blocks = nn.ModuleList([PlainBlock(cfg, self.rope) for _ in range(self.depth)])
         self.norm_o = RMSNorm(cfg.d_model, cfg.norm_eps)
         self.W_o = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)

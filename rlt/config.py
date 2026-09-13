@@ -24,10 +24,18 @@ class RLTConfig:
     G: int = 1                 # encoder memory groups (Sec. 2.2)
     alpha: float = 1.0         # feedback scale, Eq. (2.11). alpha = 0 removes recurrence.
     tied: bool = True          # Sec. 2.6 reference tied configuration
+    use_rope: bool = True      # see below
     rope_base: float = 10000.0
     norm_eps: float = 1e-6
     max_position: int = 4096
     init_std: float = 0.02
+
+    # `use_rope = False` is not in the paper. Eq. (2.12)-(2.13) say only that
+    # query/key maps include "any positional transformation", leaving the choice
+    # open. It matters for the length-extrapolation measurement (E3): a causal
+    # encoder already breaks permutation symmetry without an explicit positional
+    # signal, so switching RoPE off separates "the recurrent state does not carry
+    # to longer sequences" from "RoPE was queried outside its trained range".
 
     def __post_init__(self):
         assert self.d_model % self.n_heads == 0

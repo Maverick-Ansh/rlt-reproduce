@@ -26,6 +26,7 @@ import time
 #              dishonest, so the baseline gets the stronger attention).
 ARMS = [
     ("rlt",        "rlt",   1.0, 1),
+    ("rlt_nope",   "rlt",   1.0, 1),
     ("rlt_a0",     "rlt",   0.0, 1),
     ("rlt_untied", "rlt",   1.0, 0),
     ("plain",      "plain", 1.0, 1),
@@ -74,7 +75,8 @@ def main():
                "--steps", str(args.steps), "--length", str(args.length),
                "--batch", str(args.batch), "--layers", str(args.layers),
                "--d-model", str(args.d_model), "--out", args.out, "--tag", tag,
-               "--compile", str(args.compile)]
+               "--compile", str(args.compile),
+               "--rope", "0" if name.endswith("_nope") else "1"]
         print(f"[{i+1}/{len(jobs)}] {tag}  ({time.time()-t0:.0f}s elapsed)", flush=True)
         with open(os.path.join(args.logs, tag + ".log"), "w") as f:
             r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
